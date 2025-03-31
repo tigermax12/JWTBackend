@@ -26,5 +26,7 @@ class Peticione extends Model
     public function firmas(){
         return $this->belongsToMany(User::class, 'peticione_user');
     }
-
+    public function file(){
+        return $this->hasOne(File::class);
+    }
 }

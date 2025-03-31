@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\File;
 use App\Models\Peticione;
 use Illuminate\Http\Request;
 use App\Models\Categoria;
@@ -20,11 +21,20 @@ class PeticioneController extends Controller
     public function index(Request $request)
     {
         try {
-            $peticiones = Peticione::all();
-            return response()->json($peticiones, 200);
+            $peticiones = Peticione::with('file')->get();
+
+            $peticiones = $peticiones->map(function ($peticion) {
+                if ($peticion->file) {
+
+                    $peticion->file->file_url = url($peticion->file->file_path);
+                }
+                return $peticion;
+            });
+
         } catch (Exception $e) {
-            return response()->json(['error' => 'Error al obtener las peticiones'], 500);
+            return response()->json(['error' => 'Error al obtener las peticiones: ' . $e->getMessage()], 500);
         }
+        return response()->json(['peticiones' => $peticiones], 200);
     }
 
     public function listMine(Request $request)
@@ -45,29 +55,46 @@ class PeticioneController extends Controller
             'descripcion' => 'required',
             'destinatario' => 'required',
             'categoria_id' => 'required|exists:categorias,id',
+            'file' => 'required|file',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['error' => $validator->errors()], 401);
+            return response()->json(['error' => $validator->errors()], 422); // 422 Unprocessable Entity es más apropiado
         }
 
         try {
             $user = Auth::user();
             $category = Categoria::findOrFail($request->categoria_id);
 
-            $peticion = new Peticione($request->all());
+            $peticion = new Peticione($request->only(['titulo', 'descripcion', 'destinatario']));
             $peticion->user()->associate($user);
             $peticion->categoria()->associate($category);
-
             $peticion->firmantes = 0;
             $peticion->estado = 'pendiente';
             $peticion->save();
 
-            return response()->json($peticion, 201);
+            if ($peticion) {
+                $fileModel = $this->fileUpload($request, $peticion->id);
+
+                if ($fileModel) {
+                    return response()->json([
+                        'message' => 'Petición creada correctamente.',
+                        'peticion' => $peticion,
+                        'file' => $fileModel,
+                    ], 201); // 201 Created
+                }
+
+                // Si falla la subida del archivo, borra la petición
+                $peticion->delete();
+                return response()->json(['error' => 'Error subiendo el archivo.'], 500);
+            }
+
+            return response()->json(['error' => 'Error al guardar la petición.'], 500);
+
         } catch (ModelNotFoundException $e) {
-            return response()->json(['error' => 'Categoría no encontrada'], 404);
+            return response()->json(['error' => 'Categoría no encontrada.'], 404);
         } catch (Exception $e) {
-            return response()->json(['error' => 'Error al crear la petición'], 500);
+            return response()->json(['error' => 'Error al crear la petición.', 'details' => $e->getMessage()], 500);
         }
     }
 
@@ -159,4 +186,26 @@ class PeticioneController extends Controller
             return response()->json(['error' => 'Error al eliminar la petición'], 500);
         }
     }
+
+    public function fileUpload(Request $req, $peticione_id = null)
+    {
+        if ($req->hasFile('file')) {
+            $file = $req->file('file');
+            $filename = time() . '_' . $file->getClientOriginalName();
+
+            // Guarda el archivo en /public/peticiones
+            $file->move(public_path('peticiones'), $filename);
+
+            $fileModel = new File;
+            $fileModel->peticione_id = $peticione_id;
+            $fileModel->name = $filename;
+            $fileModel->file_path = 'peticiones/' . $filename;
+            $fileModel->save();
+
+            return $fileModel;
+        }
+
+        return null;
+    }
+
 }
