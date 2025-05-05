@@ -30,7 +30,6 @@ class PeticionePolicy
         return !$peticion->firmas()->where('user_id', $user->id)->exists();
     }
 
-
     public function cambiarEstado(User $user, Peticione $peticione): bool
     {
         return $user->role_id === 1;

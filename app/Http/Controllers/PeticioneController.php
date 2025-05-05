@@ -41,12 +41,24 @@ class PeticioneController extends Controller
     {
         try {
             $user = Auth::user();
-            $peticiones = Peticione::where('user_id', $user->id)->get();
-            return response()->json($peticiones, 200);
+
+            $peticiones = Peticione::with('file') // cargar la relación del archivo
+            ->where('user_id', $user->id)
+                ->get();
+
+            $peticiones = $peticiones->map(function ($peticion) {
+                if ($peticion->file) {
+                    $peticion->file->file_url = url($peticion->file->file_path);
+                }
+                return $peticion;
+            });
+
+            return response()->json(['peticiones' => $peticiones], 200);
         } catch (Exception $e) {
-            return response()->json(['error' => 'Error al obtener tus peticiones'], 500);
+            return response()->json(['error' => 'Error al obtener tus peticiones: ' . $e->getMessage()], 500);
         }
     }
+
 
     public function store(Request $request)
     {
@@ -98,15 +110,19 @@ class PeticioneController extends Controller
         }
     }
 
-    public function show(Request $request, $id)
+    public function show($id)
     {
-        try {
-            $peticion = Peticione::findOrFail($id);
-            return response()->json($peticion, 200);
-        } catch (ModelNotFoundException $e) {
-            return response()->json(['error' => 'Petición no encontrada'], 404);
-        }
+        $peticion = Peticione::with('firmas')->findOrFail($id);
+        $user = Auth::user();
+
+        $yaFirmada = $user ? $peticion->firmas()->where('user_id', $user->id)->exists() : false;
+
+        return response()->json([
+            'peticion' => $peticion,
+            'ya_firmada' => $yaFirmada,
+        ]);
     }
+
 
     public function update(Request $request, $id)
     {
@@ -114,6 +130,22 @@ class PeticioneController extends Controller
             $peticion = Peticione::findOrFail($id);
             $this->authorize('update', $peticion);
             $peticion->update($request->all());
+            if ($request->hasFile('file')) {
+                $peticion->file()->delete();
+                $fileModel = $this->fileUpload($request, $peticion->id);
+
+                if ($fileModel) {
+                    return response()->json([
+                        'message' => 'Petición creada correctamente.',
+                        'peticion' => $peticion,
+                        'file' => $fileModel,
+                    ], 201); // 201 Created
+                }
+
+                // Si falla la subida del archivo, borra la petición
+                $peticion->delete();
+                return response()->json(['error' => 'Error subiendo el archivo.'], 500);
+            }
             return response()->json($peticion, 200);
         } catch (ModelNotFoundException $e) {
             return response()->json(['error' => 'Petición no encontrada'], 404);
